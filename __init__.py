@@ -28,7 +28,7 @@ class VJev:
         return ids[0]
 
     def select(self, image_url, prompt, choices, mode="choice_logits"):
-        """choices maps single-token labels to descriptions; image_url may be a data URL."""
+        """prompt is the fixed task; choices maps single-token labels to descriptions."""
         if not choices:
             raise ValueError("choices must not be empty")
         if mode not in ("choice_logits", "binary_yes_no"):
@@ -37,16 +37,23 @@ class VJev:
         ids = [self._token_id(label) for label in labels]
         if len(set(ids)) != len(ids):
             raise ValueError("Choice labels must have distinct token IDs")
+        system = (
+            f"Task: {prompt}\n"
+            "Use the image as evidence. Directions are relative to the image: "
+            "up is toward the top, down toward the bottom, left and right as displayed.\n"
+            "For an options question, reply with one option label only. "
+            "For a candidate question, reply with lowercase yes or no only."
+        )
         options = "\n".join(f"{key}: {value}" for key, value in choices.items())
-        texts = [f"{prompt}\n\nOptions:\n{options}\nReply with one option label only."]
+        texts = [f"Choose the correct option.\nOptions:\n{options}"]
         if mode == "binary_yes_no":
             no, yes = self._token_id("no"), self._token_id("yes")
             texts += [
-                f"{prompt}\n\nCandidate: {value}\n"
-                "Is this the correct choice? Reply with yes or no only."
+                f"Candidate: {value}\nIs this the correct choice?"
                 for value in choices.values()
             ]
-        requests = [[{"role": "user", "content": [
+        requests = [[{"role": "system", "content": system},
+                     {"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": image_url}},
             {"type": "text", "text": text},
         ]}] for text in texts]

@@ -2,6 +2,8 @@
 
 输入 RGB、任务和选项，调用 vLLM 读取首位置 logits，返回得分最高的选项。
 
+输入顺序：固定 system（任务、图像方向、输出格式）→ 当前 RGB → 选项/候选。同一任务保持 `prompt` 不变；缓存命中仍受引擎块大小限制。
+
 依赖 `vllm==0.19.1`。在 `vjev` 的父目录（如 `~/Project`）运行：
 
 ```python
@@ -13,7 +15,7 @@ model = VJev("Qwen/Qwen3.5-9B", dtype="bfloat16")
 rgb = base64.b64encode(Path("frame.png").read_bytes()).decode()
 result = model.select(
     image_url=f"data:image/png;base64,{rgb}",
-    prompt="红色方块下一步往哪里移动，能接近绿色终点？方向按图像上下左右。",
+    prompt="选择让红色方块接近绿色终点的下一步移动。",
     choices={"A": "上", "B": "下", "C": "左", "D": "右"},
     mode="choice_logits",
 )
