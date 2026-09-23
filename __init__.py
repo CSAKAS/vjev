@@ -18,7 +18,7 @@ class VJev:
             model=model, **engine_args, generation_config="vllm",
             logprobs_mode="raw_logits", max_logprobs=-1,
         )
-        self.params = SamplingParams(temperature=0, max_tokens=1, logprobs=-1)
+        self.params = SamplingParams(temperature=0, max_tokens=1, logprobs=-1, detokenize=False)
         self.tokenizer = self.llm.get_tokenizer()
 
     def _token_id(self, label):
@@ -27,12 +27,15 @@ class VJev:
             raise ValueError(f"Output label must be one token: {label!r}")
         return ids[0]
 
-    def select(self, image_url, prompt, choices, mode="choice_logits"):
+    def select(self, image_url, prompt, choices, mode="choice_logits",
+               order="system_image_question"):
         """prompt is the fixed task; choices maps single-token labels to descriptions."""
         if not choices:
             raise ValueError("choices must not be empty")
         if mode not in ("choice_logits", "binary_yes_no"):
             raise ValueError(f"Unknown mode: {mode}")
+        if order not in ("system_image_question", "system_question_image", "image_rules_question"):
+            raise ValueError(f"Unknown order: {order}")
         labels = list(choices)
         ids = [self._token_id(label) for label in labels]
         if len(set(ids)) != len(ids):
@@ -52,13 +55,19 @@ class VJev:
                 f"Candidate: {value}\nIs this the correct choice?"
                 for value in choices.values()
             ]
-        requests = [[{"role": "system", "content": system},
-                     {"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": image_url}},
-            {"type": "text", "text": text},
-        ]}] for text in texts]
+        requests = []
+        for text in texts:
+            image = {"type": "image_url", "image_url": {"url": image_url}}
+            question = {"type": "text", "text": "\n\n" + text + "\n\n"}
+            messages = [{"role": "system", "content": system}]
+            content = [question, image] if order == "system_question_image" else [image, question]
+            if order == "image_rules_question":
+                messages = []
+                content.insert(1, {"type": "text", "text": "\n\n" + system})
+            requests.append(messages + [{"role": "user", "content": content}])
         outputs = self.llm.chat(
             requests, self.params, use_tqdm=False,
+            chat_template_content_format="openai",
             chat_template_kwargs={"enable_thinking": False},
         )
 
@@ -70,7 +79,8 @@ class VJev:
             logits = [result.logprobs[0][t].logprob for t in token_ids]
             selected.append(logits)
             raw.append({
-                "text": result.text, "token_ids": list(result.token_ids),
+                "text": self.tokenizer.decode(result.token_ids, skip_special_tokens=True),
+                "token_ids": list(result.token_ids),
                 "finish_reason": result.finish_reason,
                 "prompt_token_ids": output.prompt_token_ids,
                 "scored_token_ids": token_ids, "logits": logits,
@@ -78,7 +88,8 @@ class VJev:
         scores = (_softmax(selected[0]) if mode == "choice_logits" else
                   [_softmax(pair)[1] for pair in selected[1:]])
         return {
-            "mode": mode, "choice": labels[max(range(len(scores)), key=scores.__getitem__)],
+            "mode": mode, "order": order,
+            "choice": labels[max(range(len(scores)), key=scores.__getitem__)],
             "scores": dict(zip(labels, scores)), "requests": requests,
             "native": raw[0], "candidate_outputs": raw[1:],
         }
